@@ -11,7 +11,12 @@
 #include <netinet/ether.h> //ether_ntoa
 #include <netinet/ip.h> //iphdr
 #include <netinet/tcp.h> //iphdr
+#include <netinet/udp.h> //iphdr
 
+#define PROTO_TCP 6
+#define PROTO_UDP 17
+#define PROTO_ICMP 1
+#define ICMPHDR_LEN 8
 #define DST_IP "192.168.230.130"
 
 void packet_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
@@ -21,10 +26,24 @@ void packet_handling(u_char *args, const struct pcap_pkthdr *header, const u_cha
 	char*ethptr=(char*)buffer;
 	char*ipptr;
 	ipptr=ptr+sizeof(struct ethhdr);
-	char*tcpptr;
-	tcpptr=ptr+sizeof(struct ethhdr)+ipptr->version<<2;
+	char*trpptr=ptr+sizeof(struct ethhdr)+ipptr->version<<2;;
 	char*data;
-	data=ptr+sizeof(struct ethhdr)+ipptr->version<<2+tcpptr->th_off<<2;
+
+	
+
+	switch(ipptr->protocol)
+	{
+		case PROTO_TCP:
+			data=ptr+sizeof(struct ethhdr)+ipptr->version<<2+tcpptr->th_off<<2;
+			break;
+		case PROTO_UDP:	
+			data=ptr+sizeof(struct ethhdr)+ipptr->version<<2+udpptr->len;
+			break;
+		case PROTO_ICMP:
+			data=ptr+sizeof(struct ethhdr)+ipptr->version<<2+ICMPHDR_LEN;
+		default:
+			printf("what is this?\n");
+	}
 
 	//filtering
 	printf("%s\n", ether_ntoa((struct ether_addr*)ethptr));

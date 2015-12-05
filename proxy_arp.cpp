@@ -2,12 +2,11 @@
 #include <string.h>
 
 #include <unistd.h> //sleep
-//#include <pthread.h>
+#include <pthread.h>
 #include <stdint.h> //uintxx_t
 #include <pcap.h>
 #include <sys/socket.h> //ethhdr -> ifru_addr
 #include <linux/if_ether.h> //ethhdr
-//#include <linux/if_arp.h>
 #include <netinet/ether.h> //ether_ntoa
 #include <netinet/ip.h> //iphdr
 #include <netinet/tcp.h> //iphdr
@@ -19,7 +18,18 @@
 #define ICMPHDR_LEN 8
 #define DST_IP "192.168.230.130"
 
-void packet_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
+struct handlezip
+{
+	pcap_t* req_handle;
+	pcap_t* res_handle;
+};
+
+void req_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
+{
+
+}
+
+void req_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
 {
 	pcap_t* r_handle = (pcap_t*)args;
 
@@ -28,8 +38,6 @@ void packet_handling(u_char *args, const struct pcap_pkthdr *header, const u_cha
 	ipptr=ptr+sizeof(struct ethhdr);
 	char*trpptr=ptr+sizeof(struct ethhdr)+ipptr->version<<2;;
 	char*data;
-
-	
 
 	switch(ipptr->protocol)
 	{
@@ -45,31 +53,40 @@ void packet_handling(u_char *args, const struct pcap_pkthdr *header, const u_cha
 			printf("what is this?\n");
 	}
 
+	//todo
 	//filtering
-	printf("%s\n", ether_ntoa((struct ether_addr*)ethptr));
-	ethptr+=6;
-	printf("%s\n", ether_ntoa((struct ether_addr*)ethptr));
 	
-	//printf("packet len : %d\n", (int)strlen((char*)buffer));
+	//todo
+	//srcMAC/IP change(MY MAC/IP)
 
+	return; //temp
     /* Send down the packet */
     if (pcap_sendpacket(r_handle, buffer, 100 /* size */) != 0)
     {
         fprintf(stderr,"\nError sending the packet: %s\n", pcap_geterr(r_handle));
         return;
     }
-};
+}
+
+void* caller_thread(void *args)
+{
+	struct handlezip* hdzip=(struct handlezip*)args;
+	pcap_loop(hdzip->res_handle , -1 , req_handling , (u_char*)hdzip->req_handle);
+
+	return NULL;
+}
 
 int main()
 {
 	pcap_if_t *alldevsp , *device;
-	pcap_t *handle, *r_handle;
+	pcap_t *req_handle, *res_handle;
 	
 	char errbuf[100] , *devname , devs[100][100];
 	int count = 1 , n;
 
-//	pthread_t thread;
-
+	pthread_t thread;
+	int iret;
+	
 	//First get the list of available devices
 	printf("Finding available devices ... ");
 	if(pcap_findalldevs( &alldevsp , errbuf))
@@ -100,16 +117,16 @@ int main()
 	}
 	
 	//			sub network NIC
-	printf("\nEnter the number of the device you want to sniff\n");
+	printf("\nEnter the number of the device(in)\n");
 	printf("-> ");
 	scanf("%d" , &n);
 	devname = devs[n];
 	
 	//Open the device for sniffing
 	printf("Opening device %s for sniffing ... " , devname);
-	handle = pcap_open_live(devname , 65536 , 1 , 0 , errbuf);
+	req_handle = pcap_open_live(devname , 65536 , 1 , 0 , errbuf);
 	
-	if (handle == NULL) 
+	if (req_handle == NULL) 
 	{
 		fprintf(stderr, "Couldn't open device %s : %s\n" , devname , errbuf);
 		exit(1);
@@ -117,24 +134,28 @@ int main()
 	printf("Done\n");
 
 	//			relay NIC
-	printf("\nEnter the number of the localhost device\n");
+	printf("\nEnter the number of the device(out)\n");
 	printf("-> ");
 	scanf("%d" , &n);
 	devname = devs[n];
 	
 	//Open the device for sniffing
 	printf("Opening device %s for sniffing ... " , devname);
-	r_handle = pcap_open_live(devname , 65536 , 1 , 0 , errbuf);
+	res_handle = pcap_open_live(devname , 65536 , 1 , 0 , errbuf);
 	
-	if (r_handle == NULL) 
+	if (res_handle == NULL) 
 	{
 		fprintf(stderr, "Couldn't open device %s : %s\n" , devname , errbuf);
 		exit(1);
 	}
 	printf("Done\n");
+
+	struct handlezip* hdzip;
+
+	if(iret = pthread_create( &thread, NULL, caller_thread, (void*)hdzip))
+	     perror("pthread_create");
 	
-	//Put the device in sniff loop
-	pcap_loop(handle , -1 , packet_handling , (u_char*)r_handle);
+	pcap_loop(req_handle , -1 , req_handling , (u_char*)res_handle);
 
 	return 0;
 }

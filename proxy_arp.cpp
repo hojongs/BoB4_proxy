@@ -9,6 +9,8 @@
 #include <linux/if_ether.h> //ethhdr
 //#include <linux/if_arp.h>
 #include <netinet/ether.h> //ether_ntoa
+#include <netinet/ip.h> //iphdr
+#include <netinet/tcp.h> //iphdr
 
 #define DST_IP "192.168.230.130"
 
@@ -16,13 +18,18 @@ void packet_handling(u_char *args, const struct pcap_pkthdr *header, const u_cha
 {
 	pcap_t* r_handle = (pcap_t*)args;
 
-	char*ptr=(char*)buffer;
-	//ptr+=sizeof(struct ethhdr);
+	char*ethptr=(char*)buffer;
+	char*ipptr;
+	ipptr=ptr+sizeof(struct ethhdr);
+	char*tcpptr;
+	tcpptr=ptr+sizeof(struct ethhdr)+ipptr->version<<2;
+	char*data;
+	data=ptr+sizeof(struct ethhdr)+ipptr->version<<2+tcpptr->th_off<<2;
 
 	//filtering
-	printf("%s\n", ether_ntoa((struct ether_addr*)ptr));
-	ptr+=6;
-	printf("%s\n", ether_ntoa((struct ether_addr*)ptr));
+	printf("%s\n", ether_ntoa((struct ether_addr*)ethptr));
+	ethptr+=6;
+	printf("%s\n", ether_ntoa((struct ether_addr*)ethptr));
 	
 	//printf("packet len : %d\n", (int)strlen((char*)buffer));
 

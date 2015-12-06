@@ -1,245 +1,286 @@
-/**********************************************************************
-* file:   disect2.c
-* date:   Tue Jun 19 20:07:49 PDT 2001  
-* Author: Martin Casado
-* Last Modified:2001-Jun-24 10:05:35 PM
-*
-* Description: 
-*
-*   Large amounts of this code were taken from tcpdump source
-*   namely the following files..
-*
-*   print-ether.c
-*   print-ip.c
-*   ip.h
-*
-* Compile with:
-* gcc -Wall -pedantic disect2.c -lpcap (-o foo_err_something) 
-*
-* Usage:
-* a.out (# of packets) "filter string"
-*
-**********************************************************************/
-
-#include <pcap.h>
-#include <stdio.h>
 #include <stdlib.h>
-#include <errno.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <netinet/if_ether.h> 
-#include <net/ethernet.h>
-#include <netinet/ether.h> 
-#include <netinet/ip.h> 
+#include <string.h>
 
-/* tcpdump header (ether.h) defines ETHER_HDRLEN) */
-#ifndef ETHER_HDRLEN 
-#define ETHER_HDRLEN 14
-#endif
+#include <unistd.h> //sleep
+#include <pthread.h>
+#include <stdint.h> //uintxx_t
+#include <pcap.h>
+#include <sys/socket.h> //ethhdr -> ifru_addr
+#include <linux/if_ether.h> //ethhdr
+#include <netinet/ether.h> //ether_ntoa
+#include <netinet/ip.h> //iphdr
+#include <netinet/tcp.h> //iphdr
+#include <netinet/udp.h> //iphdr
+#include <arpa/inet.h> //inet_addr
 
-u_int16_t handle_ethernet
-        (u_char *args,const struct pcap_pkthdr* pkthdr,const u_char*
-        packet);
-u_char* handle_IP
-        (u_char *args,const struct pcap_pkthdr* pkthdr,const u_char*
-        packet);
+#include "handlezip.h"
 
+#define PROTO_TCP 6
+#define PROTO_UDP 17
+#define PROTO_ICMP 1
+#define ICMPHDR_LEN 8
+#define MIDDLE_MAC {0x00, 0x0c, 0x29, 0x77, 0xe5, 0x7e} //(SRC)AP_IP/MAC -> MIDDLE_IP/MAC
+#define MIDDLE_IP "192.168.230.255"
+#define AP_MAC {0x00, 0x00, 0x00, 0x00, 0x00, 0x00}									//(DST)MIDDLE_IP/MAC -> AP_IP/MAC
+#define AP_IP "192.168.230.164"
 
-/*
- * Structure of an internet header, naked of options.
- *
- * Stolen from tcpdump source (thanks tcpdump people)
- *
- * We declare ip_len and ip_off to be short, rather than u_short
- * pragmatically since otherwise unsigned comparisons can result
- * against negative integers quite easily, and fail in subtle ways.
- */
-struct my_ip {
-	u_int8_t	ip_vhl;		/* header length, version */
-#define IP_V(ip)	(((ip)->ip_vhl & 0xf0) >> 4)
-#define IP_HL(ip)	((ip)->ip_vhl & 0x0f)
-	u_int8_t	ip_tos;		/* type of service */
-	u_int16_t	ip_len;		/* total length */
-	u_int16_t	ip_id;		/* identification */
-	u_int16_t	ip_off;		/* fragment offset field */
-#define	IP_DF 0x4000			/* dont fragment flag */
-#define	IP_MF 0x2000			/* more fragments flag */
-#define	IP_OFFMASK 0x1fff		/* mask for fragmenting bits */
-	u_int8_t	ip_ttl;		/* time to live */
-	u_int8_t	ip_p;		/* protocol */
-	u_int16_t	ip_sum;		/* checksum */
-	struct	in_addr ip_src,ip_dst;	/* source and dest address */
-};
-
-/* looking at ethernet headers */
-void my_callback(u_char *args,const struct pcap_pkthdr* pkthdr,const u_char*
-        packet)
+void req_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
 {
-    u_int16_t type = handle_ethernet(args,pkthdr,packet);
+	pcap_t* res_handle = (pcap_t*)args;
 
-    if(type == ETHERTYPE_IP)
-    {/* handle IP packet */
-        handle_IP(args,pkthdr,packet);
-    }else if(type == ETHERTYPE_ARP)
-    {/* handle arp packet */
-    }
-    else if(type == ETHERTYPE_REVARP)
-    {/* handle reverse arp packet */
-    }
+	char*ptr=(char*)buffer;
+	struct ethhdr*ethptr=(struct ethhdr*)ptr;
+	struct iphdr*ipptr;
+	struct tcphdr*tcpptr;
+	struct udphdr*udpptr;
+	char*data;
+
+	if(ethptr->h_proto==htons(ETH_P_IP))
+	{
+		ipptr=(struct iphdr*)(ptr+sizeof(struct ethhdr));
+	}
+	else
+	{
+		printf("IPv6\n");
+		return;
+	}
+
+	switch(ipptr->protocol)
+	{
+		case PROTO_TCP:
+		tcpptr=(struct tcphdr*)(ptr+sizeof(struct ethhdr)+ipptr->version*4);
+		data=ptr+sizeof(struct ethhdr)+ipptr->version*4+tcpptr->th_off*4;
+		break;
+		case PROTO_UDP:
+		udpptr=(struct udphdr*)(ptr+sizeof(struct ethhdr)+ipptr->version*4);
+		data=ptr+sizeof(struct ethhdr)+ipptr->version*4+udpptr->len;
+		break;
+		case PROTO_ICMP:
+		data=ptr+sizeof(struct ethhdr)+ipptr->version*4+ICMPHDR_LEN;
+		break;
+		default:
+		printf("exception\n");
+		printf("type : 0x%x\n", ipptr->protocol);
+	}
+
+	printf("len : %d bytes\n", header->len);
+
+	fwrite(data, 1, header->len, stdout);
+	//todo
+	//filtering
+	
+	if(ipptr->saddr == inet_addr(AP_IP))
+	{ //request packet
+		u_char* temp=(u_char*)ethptr->h_source;
+		printf ("mac before : ");
+		for(int i=0;i<ETH_ALEN;i++)
+		{
+			printf("%02x", temp[i]);
+			if(i<ETH_ALEN-1)
+				printf(":");
+		}
+		printf("\n");
+		u_char mac_array[6]=MIDDLE_MAC;
+		printf ("mac after  : ");
+		for(int i=0;i<ETH_ALEN;i++)
+		{
+			temp[i]=mac_array[i];
+			printf("%02x", temp[i]);
+			if(i<ETH_ALEN-1)
+				printf(":");
+		}
+		printf("\n");
+
+		printf("0x%08x\n", ipptr->saddr);
+		ipptr->saddr=inet_addr(MIDDLE_IP);
+		printf("0x%08x\n", ipptr->saddr);
+	}
+
+	return; //stop
+
+	/* Send down the packet */
+	if (pcap_sendpacket(res_handle, buffer, header->len /* size */) != 0)
+	{
+		fprintf(stderr,"\nError sending the packet: %s\n", pcap_geterr(res_handle));
+		return;
+	}
 }
 
-u_char* handle_IP
-        (u_char *args,const struct pcap_pkthdr* pkthdr,const u_char*
-        packet)
+void res_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *buffer)
 {
-    const struct my_ip* ip;
-    u_int length = pkthdr->len;
-    u_int hlen,off,version;
-    //int i;
+	pcap_t* req_handle = (pcap_t*)args;
 
-    u_int len;
+	char*ptr=(char*)buffer;
+	struct ethhdr*ethptr=(struct ethhdr*)ptr;
+	struct iphdr*ipptr;
+	struct tcphdr*tcpptr;
+	struct udphdr*udpptr;
+	char*data;
 
-    /* jump pass the ethernet header */
-    ip = (struct my_ip*)(packet + sizeof(struct ether_header));
-    length -= sizeof(struct ether_header); 
+	if(ethptr->h_proto==htons(ETH_P_IP))
+	{
+		ipptr=(struct iphdr*)(ptr+sizeof(struct ethhdr));
+	}
+	else
+	{
+		printf("IPv6\n");
+		return;
+	}
 
-    /* check to see we have a packet of valid length */
-    if (length < sizeof(struct my_ip))
-    {
-        printf("truncated ip %d",length);
-        return NULL;
-    }
+	switch(ipptr->protocol)
+	{
+		case PROTO_TCP:
+		tcpptr=(struct tcphdr*)(ptr+sizeof(struct ethhdr)+ipptr->version*4);
+		data=ptr+sizeof(struct ethhdr)+ipptr->version*4+tcpptr->th_off*4;
+		break;
+		case PROTO_UDP:
+		udpptr=(struct udphdr*)(ptr+sizeof(struct ethhdr)+ipptr->version*4);
+		data=ptr+sizeof(struct ethhdr)+ipptr->version*4+udpptr->len;
+		break;
+		case PROTO_ICMP:
+		data=ptr+sizeof(struct ethhdr)+ipptr->version*4+ICMPHDR_LEN;
+		break;
+		default:
+		printf("exception\n");
+		printf("type : 0x%x\n", ipptr->protocol);
+	}
 
-    len     = ntohs(ip->ip_len);
-    hlen    = IP_HL(ip); /* header length */
-    version = IP_V(ip);/* ip version */
+	printf("len : %d bytes\n", header->len);
 
-    /* check version */
-    if(version != 4)
-    {
-      fprintf(stdout,"Unknown version %d\n",version);
-      return NULL;
-    }
+	fwrite(data, 1, header->len, stdout);
+	//todo
+	//filtering
+	
+	if(ipptr->daddr == inet_addr(AP_IP))
+	{ //request packet
+		u_char* temp=(u_char*)ethptr->h_dest;
+		printf ("mac before : ");
+		for(int i=0;i<ETH_ALEN;i++)
+		{
+			printf("%02x", temp[i]);
+			if(i<ETH_ALEN-1)
+				printf(":");
+		}
+		printf("\n");
+		u_char mac_array[6]=AP_MAC;
+		printf ("mac after  : ");
+		for(int i=0;i<ETH_ALEN;i++)
+		{
+			temp[i]=mac_array[i];
+			printf("%02x", temp[i]);
+			if(i<ETH_ALEN-1)
+				printf(":");
+		}
+		printf("\n");
 
-    /* check header length */
-    if(hlen < 5 )
-    {
-        fprintf(stdout,"bad-hlen %d \n",hlen);
-    }
+		printf("0x%08x\n", ipptr->daddr);
+		ipptr->saddr=inet_addr(AP_IP);
+		printf("0x%08x\n", ipptr->daddr);
+	}
 
-    /* see if we have as much packet as we should */
-    if(length < len)
-        printf("\ntruncated IP - %d bytes missing\n",len - length);
+	return; //stop
 
-    /* Check to see if we have the first fragment */
-    off = ntohs(ip->ip_off);
-    if((off & 0x1fff) == 0 )/* aka no 1's in first 13 bits */
-    {/* print SOURCE DESTINATION hlen version len offset */
-        fprintf(stdout,"IP: ");
-        fprintf(stdout,"%s ",
-                inet_ntoa(ip->ip_src));
-        fprintf(stdout,"%s %d %d %d %d\n",
-                inet_ntoa(ip->ip_dst),
-                hlen,version,len,off);
-    }
-
-    return NULL;
+	/* Send down the packet */
+	if (pcap_sendpacket(req_handle, buffer, header->len /* size */) != 0)
+	{
+		fprintf(stderr,"\nError sending the packet: %s\n", pcap_geterr(req_handle));
+		return;
+	}
 }
 
-/* handle ethernet packets, much of this code gleaned from
- * print-ether.c from tcpdump source
- */
-u_int16_t handle_ethernet
-        (u_char *args,const struct pcap_pkthdr* pkthdr,const u_char*
-        packet)
-{
-    u_int caplen = pkthdr->caplen;
-    u_int length = pkthdr->len;
-    struct ether_header *eptr;  /* net/ethernet.h */
-    u_short ether_type;
 
-    if (caplen < ETHER_HDRLEN)
-    {
-        fprintf(stdout,"Packet length less than ethernet header length\n");
-        return -1;
-    }
+void* caller_thread(void *args)
+{ //res_handling func caller
+	struct handlezip* hdzip=(struct handlezip*)args;
+	pcap_loop(hdzip->res_handle , -1 , res_handling , (u_char*)hdzip->req_handle);
 
-    /* lets start with the ether header... */
-    eptr = (struct ether_header *) packet;
-    ether_type = ntohs(eptr->ether_type);
-
-    /* Lets print SOURCE DEST TYPE LENGTH */
-    fprintf(stdout,"ETH: ");
-    fprintf(stdout,"%s "
-            ,ether_ntoa((struct ether_addr*)eptr->ether_shost));
-    fprintf(stdout,"%s "
-            ,ether_ntoa((struct ether_addr*)eptr->ether_dhost));
-
-    /* check to see if we have an ip packet */
-    if (ether_type == ETHERTYPE_IP)
-    {
-        fprintf(stdout,"(IP)");
-    }else  if (ether_type == ETHERTYPE_ARP)
-    {
-        fprintf(stdout,"(ARP)");
-    }else  if (eptr->ether_type == ETHERTYPE_REVARP)
-    {
-        fprintf(stdout,"(RARP)");
-    }else {
-        fprintf(stdout,"(?)");
-    }
-    fprintf(stdout," %d\n",length);
-
-    return ether_type;
+	return NULL;
 }
 
 
 int main(int argc,char **argv)
-{ 
-    char *dev; 
-    char errbuf[PCAP_ERRBUF_SIZE];
-    pcap_t* descr;
-    struct bpf_program fp;      /* hold compiled program     */
-    bpf_u_int32 maskp;          /* subnet mask               */
-    bpf_u_int32 netp;           /* ip                        */
-    u_char* args = NULL;
+{
+	pcap_if_t *alldevsp , *device;
+	pcap_t *req_handle, *res_handle;
+	
+	char errbuf[100] , *devname , devs[100][100];
+	int count = 1 , n;
 
-    /* Options must be passed in as a string because I am lazy */
-    if(argc < 2){ 
-        fprintf(stdout,"Usage: %s numpackets \"options\"\n",argv[0]);
-        return 0;
-    }
+	pthread_t thread;
+	int iret;
+	
+	//First get the list of available devices
+	printf("Finding available devices ... ");
+	if(pcap_findalldevs( &alldevsp , errbuf))
+	{
+		printf("Error finding devices : %s\n" , errbuf);
+		exit(1);
+	}
+	if(alldevsp == NULL)
+	{
+		printf("\n*** devices are not exist. ***\n");
+		printf("*** Use 'sudo' ***\n");
+		exit(1);
+	}
+	printf("Done\n");
+	
+	//Print the available devices
+	printf("\nAvailable Devices are :\n");
+	for(device = alldevsp ; device != NULL ; device = device->next)
+	{
+		printf("%d. %s" , count , device->name);
+		if(device->description != NULL)
+			printf(" - %s", device->description);
+		printf("\n");
+		if(device->name != NULL)
+		{
+			strcpy(devs[count] , device->name);
+		}
+		count++;
+	}
+	
+	//          sub network NIC
+	printf("\nEnter the number of the device(in)\n");
+	printf("-> ");
+	scanf("%d" , &n);
+	devname = devs[n];
+	
+	//Open the device for sniffing
+	printf("Opening device %s for sniffing ... " , devname);
+	req_handle = pcap_open_live(devname , 65536 , 1 , 0 , errbuf);
+	
+	if (req_handle == NULL) 
+	{
+		fprintf(stderr, "Couldn't open device %s : %s\n" , devname , errbuf);
+		exit(1);
+	}
+	printf("Done\n");
 
-    /* grab a device to peak into... */
-    dev = pcap_lookupdev(errbuf);
-    if(dev == NULL)
-    { printf("%s\n",errbuf); exit(1); }
+	//          relay NIC
+	printf("\nEnter the number of the device(out)\n");
+	printf("-> ");
+	scanf("%d" , &n);
+	devname = devs[n];
+	
+	//Open the device for sniffing
+	printf("Opening device %s for sniffing ... " , devname);
+	res_handle = pcap_open_live(devname , 65536 , 1 , 0 , errbuf);
+	
+	if (res_handle == NULL) 
+	{
+		fprintf(stderr, "Couldn't open device %s : %s\n" , devname , errbuf);
+		exit(1);
+	}
+	printf("Done\n");
 
-    /* ask pcap for the network address and mask of the device */
-    pcap_lookupnet(dev,&netp,&maskp,errbuf);
+	struct handlezip hdzip;
+	hdzip.req_handle=req_handle;
+	hdzip.res_handle=res_handle;
 
-    /* open device for reading. NOTE: defaulting to
-     * promiscuous mode*/
-    descr = pcap_open_live(dev,BUFSIZ,1,-1,errbuf);
-    if(descr == NULL)
-    { printf("pcap_open_live(): %s\n",errbuf); exit(1); }
+    if(iret = pthread_create( &thread, NULL, caller_thread, (void*)&hdzip))
+         perror("pthread_create");
+	
+	pcap_loop(req_handle , -1 , req_handling , (u_char*)res_handle);
 
-
-    if(argc > 2)
-    {
-        /* Lets try and compile the program.. non-optimized */
-        if(pcap_compile(descr,&fp,argv[2],0,netp) == -1)
-        { fprintf(stderr,"Error calling pcap_compile\n"); exit(1); }
-
-        /* set the compiled program as the filter */
-        if(pcap_setfilter(descr,&fp) == -1)
-        { fprintf(stderr,"Error setting filter\n"); exit(1); }
-    }
-
-    /* ... and loop */ 
-    pcap_loop(descr,atoi(argv[1]),my_callback,args);
-
-    fprintf(stdout,"\nfinished\n");
-    return 0;
+	return 0;
 }

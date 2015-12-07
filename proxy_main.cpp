@@ -20,7 +20,7 @@
 #define PROTO_ICMP 1
 #define ICMPHDR_LEN 8
 #define MIDDLE_MAC {0xd8, 0xfc, 0x93, 0x46, 0x58, 0x70} //(SRC)AP_IP/MAC -> MIDDLE_IP/MAC
-#define MIDDLE_IP "192.168.32.231" //BOB
+#define MIDDLE_IP "192.168.32.44" //ME
 #define AP_MAC {0x00, 0x27, 0x1c, 0xcd, 0xdd, 0x04}									//(DST)MIDDLE_IP/MAC -> AP_IP/MAC
 #define AP_IP "192.168.137.84" //BOB_MIL
 
@@ -41,7 +41,7 @@ void req_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *
 	}
 	else
 	{
-		printf("IPv6\n");
+	//	printf("IPv6\n");
 		return;
 	}
 
@@ -62,8 +62,9 @@ void req_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *
 		printf("exception\n");
 		printf("type : 0x%x\n", ipptr->protocol);
 	}
-
-	printf("len : %d bytes\n", header->len);
+	
+	if(ipptr->protocol==PROTO_ICMP)
+		printf("len : %d bytes\n", header->len);
 
 	fwrite(data, 1, header->len, stdout);
 	//todo
@@ -123,7 +124,7 @@ void res_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *
 	}
 	else
 	{
-		printf("IPv6\n");
+		//printf("IPv6\n");
 		return;
 	}
 
@@ -145,7 +146,8 @@ void res_handling(u_char *args, const struct pcap_pkthdr *header, const u_char *
 		printf("type : 0x%x\n", ipptr->protocol);
 	}
 
-	printf("len : %d bytes\n", header->len);
+	if(ipptr->protocol==PROTO_ICMP)
+		printf("len : %d bytes\n", header->len);
 
 	fwrite(data, 1, header->len, stdout);
 	//todo
